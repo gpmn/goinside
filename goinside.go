@@ -450,8 +450,12 @@ func Inject(pid int, libPath string) error {
 	return injectInner(pid, libPath, libraryArray, symbolMap, "main")
 }
 
-func prompt() {
-	fmt.Print("\ngocon> ")
+func prompt(lineContinue bool) {
+	if lineContinue {
+		fmt.Print(" ... ->     ")
+	} else {
+		fmt.Print("\ngocon> ")
+	}
 }
 
 /*
@@ -541,23 +545,34 @@ func shell() {
 		return
 	}
 	scanner := bufio.NewScanner(os.Stdin)
+	var line string
+	lineContinue := false
 	for {
-		prompt()
+		prompt(lineContinue)
 		if !scanner.Scan() {
 			break
 		}
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
+		tmpline := scanner.Text()
+		if strings.HasSuffix(tmpline, "\\") {
+			line += tmpline[:len(tmpline)-1] + string("\n")
+			lineContinue = true
+			continue
+		} else {
+			line += tmpline
+		}
+		lineContinue = false
+		trimedLine := strings.TrimSpace(line)
+		line = ""
 
-		if 0 == len(line) {
+		if 0 == len(trimedLine) {
 			continue
 		}
 
-		if "exit" == strings.ToLower(line) || "quit" == strings.ToLower(line) {
+		if "exit" == strings.ToLower(trimedLine) || "quit" == strings.ToLower(trimedLine) {
 			break
 		}
 
-		splited := strings.Fields(line)
+		splited := strings.Fields(trimedLine)
 		execPath, err := exec.LookPath(splited[0])
 		// if it is a system command
 		if nil == err && len(execPath) > 0 {
@@ -574,8 +589,8 @@ func shell() {
 		}
 
 		// try to parse the command
-		if err := L.DoString(line); err != nil {
-			panic(err)
+		if err := L.DoString(trimedLine); err != nil {
+			fmt.Printf("lua error : %s", err)
 		}
 	}
 }
