@@ -1,4 +1,5 @@
 package main
+import goinside
 
 func inject(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) error {
 	// void* dlopen_wrapper(void*(*dlopen_ptr)(const char* , int ), const char* path, int flag){
