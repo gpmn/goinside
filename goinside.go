@@ -4,14 +4,16 @@ import (
 	"C"
 	"bufio"
 	"debug/elf"
-	"fmt"
 	"flag"
+	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
 
 	_ "github.com/go-errors/errors"
+	lua "github.com/yuin/gopher-lua"
 )
 
 //LibraryInfoItem :
@@ -32,7 +34,28 @@ func (s *SymbolInfoEx) GetLibrary(procLibInfos []LibraryInfoItem) string {
 	return procLibInfos[s.libraryIdx].LibPath
 }
 
-//export ParseEmbedded
+type RemoteSymbol struct {
+	elf.Symbol
+	libPath string
+}
+type GoInsideRPC struct {
+}
+
+func (r *GoInsideRPC) GetSymbolByName(sym string, idx int) ([]RemoteSymbol, error) {
+	return nil, nil
+}
+
+func (r *GoInsideRPC) Execute(sym string, args []interface{}) (res uint64, err error) {
+	return 0, nil
+}
+
+func (r *GoInsideRPC) GetContent(addr uintptr) (cont []byte, err error) {
+	return nil, err
+}
+
+func (r *GoInsideRPC) SetContent(addr uintptr) (cont []byte, err error) {
+	return nil, err
+}
 
 func check(e error) {
 	if e != nil {
@@ -232,7 +255,6 @@ func getBytesFromUint64(val uint64) [8]byte {
 	}
 }
 
-
 func showWaitStatus(desc string, ws syscall.WaitStatus) {
 	var res string
 	if ws.Continued() {
@@ -428,7 +450,137 @@ func Inject(pid int, libPath string) error {
 	return injectInner(pid, libPath, libraryArray, symbolMap, "main")
 }
 
-func main(){
+func prompt() {
+	fmt.Print("\ngocon> ")
+}
+
+/*
+func splitAround(str string, tok string) (res []string) {
+	poses := []int{}
+	lastpos := 0
+	for {
+		pos := strings.IndexAny(str[lastpos:], tok)
+		if -1 == pos {
+			break
+		}
+		poses = append(poses, pos+lastpos)
+		lastpos = pos
+	}
+	fmt.Printf("splitAround - %s pos : %v\n", tok, poses)
+	if len(poses) == 0 {
+		return []string{str}
+	}
+
+	lastpos = 0
+	for idx, pos := range poses {
+		if lastpos != pos {
+			res = append(res, str[lastpos:pos])
+		}
+		res = append(res, str[pos:pos+1])
+		if idx == len(poses)-1 {
+			res = append(res, str[pos+1:])
+		}
+		lastpos = pos
+	}
+	return res
+}
+
+func tokenlize(line string) ([]string, error) {
+	var results, tks []string
+	var poses []int
+	lastpos := 0
+
+	for {
+		pos := strings.Index(line[lastpos:], "\"")
+		if -1 == pos {
+			break
+		}
+		poses = append(poses, pos+lastpos)
+		lastpos = pos
+	}
+	fmt.Printf("tokenlize - \" pos : %v\n", poses)
+	if len(poses)%2 != 0 {
+		return nil, fmt.Errorf("\" not match")
+	}
+
+	if len(poses) == 0 {
+		tks = append(tks, line)
+	} else {
+		for idx := 0; idx < len(poses)/2; idx++ {
+			tks = append(tks, line[poses[idx]:1+poses[idx+1]])
+		}
+	}
+
+	for idx := 0; idx < len(tks); idx++ {
+		if tks[idx][0] == '"' { // string token, no need to split
+			results = append(results, tks[idx])
+			continue
+		}
+
+		tmpstrs := strings.FieldsFunc(tks[idx], func(c rune) bool {
+			if unicode.IsSpace(c) {
+				return true
+			}
+			if c == '(' || c == ')' || c == ',' || c == ';' {
+				return true
+			}
+			return false
+		})
+		results = append(results, tmpstrs...)
+	}
+	return results, nil
+}*/
+
+func shell() {
+	L := lua.NewState()
+	defer L.Close()
+
+	shPath, err := exec.LookPath("sh")
+	if shPath == "" || nil != err {
+		fmt.Printf("can not find sh, err: %v\n", err)
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		prompt()
+		if !scanner.Scan() {
+			break
+		}
+		line := scanner.Text()
+		line = strings.TrimSpace(line)
+
+		if 0 == len(line) {
+			continue
+		}
+
+		if "exit" == strings.ToLower(line) || "quit" == strings.ToLower(line) {
+			break
+		}
+
+		splited := strings.Fields(line)
+		execPath, err := exec.LookPath(splited[0])
+		// if it is a system command
+		if nil == err && len(execPath) > 0 {
+			var args []string
+			args = append(args, "-c")
+			splited[0] = execPath
+			args = append(args, splited...)
+			cmd := exec.Command(shPath, args...)
+			cmd.Stderr = os.Stderr
+			cmd.Stdout = os.Stdout
+			cmd.Stdin = os.Stdin
+			err = cmd.Run()
+			continue
+		}
+
+		// try to parse the command
+		if err := L.DoString(line); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func main() {
 	pidptr := flag.Int("pid", 0, "target process's pid")
 	flag.Parse()
 	if *pidptr < 0 {
@@ -441,5 +593,5 @@ func main(){
 	} else {
 		fmt.Printf("Inject failed, error %s\n", err)
 	}
-
+	shell()
 }
