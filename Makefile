@@ -1,7 +1,7 @@
 BINDIR:=${GOPATH}/bin
 all:clean dummy
-	cd goinside && go build -buildmode=c-shared -o ${BINDIR}/libgoinside.so
-	cd goinside && go build -o ${BINDIR}/goinject
+	go build -buildmode=c-shared -o ${BINDIR}/libgoinside.so
+	go build -o ${BINDIR}/goinject
 	file ${BINDIR}/libgoinside.so
 	file ${BINDIR}/goinject
 
