@@ -4,7 +4,6 @@ import (
 	"C"
 	"bufio"
 	"debug/elf"
-	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -232,36 +231,7 @@ func getBytesFromUint64(val uint64) [8]byte {
 	}
 }
 
-func showWaitStatus(desc string, ws syscall.WaitStatus) {
-	var res string
-	if ws.Continued() {
-		res += "Continued "
-	}
-
-	if ws.CoreDump() {
-		res += "CoreDump "
-	}
-
-	res += fmt.Sprintf("ExitStatus%d ", ws.ExitStatus())
-
-	if ws.Exited() {
-		res += "Exited "
-	}
-
-	res += fmt.Sprintf("Signal%d ", ws.Signal())
-
-	if ws.Signaled() {
-		res += "Signaled "
-	}
-	res += fmt.Sprintf("StopSignal%d ", ws.StopSignal())
-	if ws.Stopped() {
-		res += "Stopped "
-	}
-	res += fmt.Sprintf("TrapCause%d", ws.TrapCause())
-	fmt.Printf("%s - ws 0x%x %s\n", desc, ws, res)
-}
-
-func inject(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) error {
+func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) error {
 	// void* dlopen_wrapper(void*(*dlopen_ptr)(const char* , int ), const char* path, int flag){
 	//       return dlopen_ptr(path, flag);
 	// }
@@ -325,7 +295,6 @@ func inject(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[
 		fmt.Printf("Wait4(%d) failed, error %s!\n", pid, err)
 		return err
 	}
-	showWaitStatus("expecting a stop signal", ws)
 
 	// 1.peek and backup stack/code/regs
 	if err = syscall.PtraceGetRegs(pid, &backupRegs); nil != err {
@@ -377,8 +346,6 @@ func inject(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[
 		return err
 	}
 
-	showWaitStatus("expecting a trap signal", ws)
-
 	// get regs to see if dlopen success
 	if err = syscall.PtraceGetRegs(pid, &regs); nil != err {
 		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
@@ -418,24 +385,13 @@ func inject(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[
 	return nil
 }
 
-func main() {
-	pidptr := flag.Int("pid", 0, "target process's pid")
-	flag.Parse()
-	if *pidptr < 0 {
-		fmt.Printf("-pid param invalid ,please supply target pid!(0 means self)")
-		os.Exit(-1)
-	}
+// Inject :
+func Inject(pid int, libPath string) error {
 
-	if *pidptr == 0 { // parse myself and launch server
-		ParseEmbedded()
-		fmt.Printf("*pidptr == 0 , exit\n")
-		//TODO:: launch server
-		os.Exit(0)
+	if pid == os.Getpid() {
+		return fmt.Errorf("can not inject to self")
 	}
-
 	// parse target process, inject libgoinside.so into it
-	libraryArray, symbolMap = parseProc(*pidptr)
-	if err := inject(*pidptr, "/home/gpmn/Workspace/goinside/Test/libgoinside.so", libraryArray, symbolMap, "main"); nil != err {
-		fmt.Printf("inject failed with error %s\n", err)
-	}
+	libraryArray, symbolMap = parseProc(pid)
+	return injectInner(pid, libPath, libraryArray, symbolMap, "main")
 }
