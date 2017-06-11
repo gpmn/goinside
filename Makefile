@@ -1,14 +1,12 @@
-all:clean inside inject  dummy
+BINDIR:=${GOPATH}/bin
+all:clean dummy
+	cd goinside && go build -buildmode=c-shared -o ${BINDIR}/libgoinside.so
+	cd goinside && go build -o ${BINDIR}/goinject
+	file ${BINDIR}/libgoinside.so
+	file ${BINDIR}/goinject
 
 clean:
-	- rm -rf ${GOPATH}/bin/libgoinside.so bin/test bin/libgoinside.h bin/dummy bin/goinject
-
-inside:
-	cd goinside && go build -buildmode=c-shared -o ${GOPATH}/bin/libgoinside.so
-	ls -l ${GOPATH}/bin/libgoinside.so
-
-inject:
-	cd goinject && go build -o ../bin/goinject && ls -l  ../bin/goinject
+	- rm -rf ${BINDIR}/libgoinside.so ${BINDIR}/test ${BINDIR}/libgoinside.h ${BINDIR}/dummy ${BINDIR}/goinject
 
 dummy:
-	gcc test/dummy.c -o bin/dummy -ldl -O0
+	gcc test/dummy.c -o ${BINDIR}/dummy -ldl -O0

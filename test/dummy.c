@@ -9,7 +9,7 @@
 void* dbg_dlopen(const char* path, int flag){
      printf("path is %s, flag is 0x%x!\n", path, flag);
      void* h = dlopen(path, flag);
-     printf("dlopen return %p, errno %d", h, errno);
+     printf("dlopen return %p, err %s", h, dlerror());
      return h;
 }
 
@@ -84,7 +84,7 @@ int main(){
      /* if(!h){ */
      /*      printf("dlopen failed with errno %d, %s\n", errno, dlerror()); */
      /* } */
-     void* h = dlopen("/lib/x86_64-linux-gnu/libjson-c.so.3.0.1", 0x102);
+
      for(int idx = 0; idx < 100000000; idx ++){
           usleep(1000000);
           msg(idx, "%d\n");

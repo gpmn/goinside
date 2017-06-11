@@ -1,10 +1,11 @@
-package goinside
+package main
 
 import (
 	"C"
 	"bufio"
 	"debug/elf"
 	"fmt"
+	"flag"
 	"os"
 	"strconv"
 	"strings"
@@ -231,7 +232,47 @@ func getBytesFromUint64(val uint64) [8]byte {
 	}
 }
 
+
+func showWaitStatus(desc string, ws syscall.WaitStatus) {
+	var res string
+	if ws.Continued() {
+		res += "Continued "
+	}
+
+	if ws.CoreDump() {
+		res += "CoreDump "
+	}
+
+	res += fmt.Sprintf("ExitStatus%d ", ws.ExitStatus())
+
+	if ws.Exited() {
+		res += "Exited "
+	}
+
+	res += fmt.Sprintf("Signal%d ", ws.Signal())
+
+	if ws.Signaled() {
+		res += "Signaled "
+	}
+	res += fmt.Sprintf("StopSignal%d ", ws.StopSignal())
+	if ws.Stopped() {
+		res += "Stopped "
+	}
+	res += fmt.Sprintf("TrapCause%d", ws.TrapCause())
+	fmt.Printf("%s - ws 0x%x %s\n", desc, ws, res)
+}
+
 func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) error {
+	if pid == os.Getpid() {
+		return fmt.Errorf("can not inject to self")
+	}
+
+	_, err := os.Stat(injectLibPath)
+	if nil != err {
+		fmt.Printf("lib %s can not be stat, error : %s\n", injectLibPath, err)
+		return err
+	}
+
 	// void* dlopen_wrapper(void*(*dlopen_ptr)(const char* , int ), const char* path, int flag){
 	//       return dlopen_ptr(path, flag);
 	// }
@@ -261,12 +302,7 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		0x90, // nop
 	}
 
-	_, err := os.Stat(injectLibPath)
-	if nil != err {
-		fmt.Printf("lib %s can not be stat, error : %s\n", injectLibPath, err)
-	}
-
-	_, addrDlopen := getSymbolByName("dlopen", 0, libArr, symMap)
+	_, addrDlopen := getSymbolByName("dbg_dlopen", 0, libArr, symMap)
 	if addrDlopen < 4 {
 		fmt.Printf("getSymbolByName(dlopen) failed, dlopen not found!\n")
 		return fmt.Errorf("dlopen not found")
@@ -295,7 +331,7 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		fmt.Printf("Wait4(%d) failed, error %s!\n", pid, err)
 		return err
 	}
-
+	showWaitStatus("expecting a stop signal", ws)
 	// 1.peek and backup stack/code/regs
 	if err = syscall.PtraceGetRegs(pid, &backupRegs); nil != err {
 		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
@@ -345,7 +381,7 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		fmt.Printf("Wait4 tracee's trap signal failed, error : %s!\n", err)
 		return err
 	}
-
+	showWaitStatus("expecting a trap signal", ws)
 	// get regs to see if dlopen success
 	if err = syscall.PtraceGetRegs(pid, &regs); nil != err {
 		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
@@ -387,11 +423,23 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 
 // Inject :
 func Inject(pid int, libPath string) error {
-
-	if pid == os.Getpid() {
-		return fmt.Errorf("can not inject to self")
-	}
 	// parse target process, inject libgoinside.so into it
 	libraryArray, symbolMap = parseProc(pid)
 	return injectInner(pid, libPath, libraryArray, symbolMap, "main")
+}
+
+func main(){
+	pidptr := flag.Int("pid", 0, "target process's pid")
+	flag.Parse()
+	if *pidptr < 0 {
+		fmt.Printf("-pid param invalid ,please supply target pid!(0 means self)")
+		os.Exit(-1)
+	}
+	err := Inject(*pidptr, "/home/golang/gopath/bin/libgoinside.so")
+	if nil == err {
+		fmt.Printf("Inject success!")
+	} else {
+		fmt.Printf("Inject failed, error %s\n", err)
+	}
+
 }
