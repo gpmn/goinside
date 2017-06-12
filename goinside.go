@@ -6,14 +6,12 @@ import (
 	"debug/elf"
 	"flag"
 	"fmt"
+
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
-
-	_ "github.com/go-errors/errors"
-	lua "github.com/yuin/gopher-lua"
 )
 
 //LibraryInfoItem :
@@ -32,29 +30,6 @@ type SymbolInfoEx struct {
 //GetLibrary :
 func (s *SymbolInfoEx) GetLibrary(procLibInfos []LibraryInfoItem) string {
 	return procLibInfos[s.libraryIdx].LibPath
-}
-
-type RemoteSymbol struct {
-	elf.Symbol
-	libPath string
-}
-type GoInsideRPC struct {
-}
-
-func (r *GoInsideRPC) GetSymbolByName(sym string, idx int) ([]RemoteSymbol, error) {
-	return nil, nil
-}
-
-func (r *GoInsideRPC) Execute(sym string, args []interface{}) (res uint64, err error) {
-	return 0, nil
-}
-
-func (r *GoInsideRPC) GetContent(addr uintptr) (cont []byte, err error) {
-	return nil, err
-}
-
-func (r *GoInsideRPC) SetContent(addr uintptr) (cont []byte, err error) {
-	return nil, err
 }
 
 func check(e error) {
@@ -458,87 +433,7 @@ func prompt(lineContinue bool) {
 	}
 }
 
-/*
-func splitAround(str string, tok string) (res []string) {
-	poses := []int{}
-	lastpos := 0
-	for {
-		pos := strings.IndexAny(str[lastpos:], tok)
-		if -1 == pos {
-			break
-		}
-		poses = append(poses, pos+lastpos)
-		lastpos = pos
-	}
-	fmt.Printf("splitAround - %s pos : %v\n", tok, poses)
-	if len(poses) == 0 {
-		return []string{str}
-	}
-
-	lastpos = 0
-	for idx, pos := range poses {
-		if lastpos != pos {
-			res = append(res, str[lastpos:pos])
-		}
-		res = append(res, str[pos:pos+1])
-		if idx == len(poses)-1 {
-			res = append(res, str[pos+1:])
-		}
-		lastpos = pos
-	}
-	return res
-}
-
-func tokenlize(line string) ([]string, error) {
-	var results, tks []string
-	var poses []int
-	lastpos := 0
-
-	for {
-		pos := strings.Index(line[lastpos:], "\"")
-		if -1 == pos {
-			break
-		}
-		poses = append(poses, pos+lastpos)
-		lastpos = pos
-	}
-	fmt.Printf("tokenlize - \" pos : %v\n", poses)
-	if len(poses)%2 != 0 {
-		return nil, fmt.Errorf("\" not match")
-	}
-
-	if len(poses) == 0 {
-		tks = append(tks, line)
-	} else {
-		for idx := 0; idx < len(poses)/2; idx++ {
-			tks = append(tks, line[poses[idx]:1+poses[idx+1]])
-		}
-	}
-
-	for idx := 0; idx < len(tks); idx++ {
-		if tks[idx][0] == '"' { // string token, no need to split
-			results = append(results, tks[idx])
-			continue
-		}
-
-		tmpstrs := strings.FieldsFunc(tks[idx], func(c rune) bool {
-			if unicode.IsSpace(c) {
-				return true
-			}
-			if c == '(' || c == ')' || c == ',' || c == ';' {
-				return true
-			}
-			return false
-		})
-		results = append(results, tmpstrs...)
-	}
-	return results, nil
-}*/
-
 func shell() {
-	L := lua.NewState()
-	defer L.Close()
-
 	shPath, err := exec.LookPath("sh")
 	if shPath == "" || nil != err {
 		fmt.Printf("can not find sh, err: %v\n", err)
@@ -587,26 +482,25 @@ func shell() {
 			err = cmd.Run()
 			continue
 		}
-
-		// try to parse the command
-		if err := L.DoString(trimedLine); err != nil {
-			fmt.Printf("lua error : %s", err)
-		}
+		// the rest
 	}
 }
 
 func main() {
-	pidptr := flag.Int("pid", 0, "target process's pid")
+	pidPtr := flag.Int("pid", 0, "target process's pid")
+	scriptPtr := flag.String("script", "", "script to be auto executed")
 	flag.Parse()
-	if *pidptr < 0 {
+	if *pidPtr < 0 {
 		fmt.Printf("-pid param invalid ,please supply target pid!(0 means self)")
 		os.Exit(-1)
 	}
-	err := Inject(*pidptr, "/home/golang/gopath/bin/libgoinside.so")
+
+	err := Inject(*pidPtr, "/home/golang/gopath/bin/libgoinside.so")
 	if nil == err {
 		fmt.Printf("Inject success!")
 	} else {
 		fmt.Printf("Inject failed, error %s\n", err)
 	}
-	shell()
+
+	qshell(false, *scriptPtr)
 }
