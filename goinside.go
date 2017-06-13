@@ -487,20 +487,19 @@ func shell() {
 }
 
 func main() {
-	pidPtr := flag.Int("pid", 0, "target process's pid")
+	pidPtr := flag.Int("pid", -1, "target process's pid")
 	scriptPtr := flag.String("script", "", "script to be auto executed")
 	flag.Parse()
+
 	if *pidPtr < 0 {
-		fmt.Printf("-pid param invalid ,please supply target pid!(0 means self)")
-		os.Exit(-1)
-	}
-
-	err := Inject(*pidPtr, "/home/golang/gopath/bin/libgoinside.so")
-	if nil == err {
-		fmt.Printf("Inject success!")
+		fmt.Printf("-pid param invalid, will not inject so to target!\n")
 	} else {
-		fmt.Printf("Inject failed, error %s\n", err)
+		err := Inject(*pidPtr, "/home/golang/gopath/bin/libgoinside.so")
+		if nil == err {
+			fmt.Printf("Inject success!")
+		} else {
+			fmt.Printf("Inject failed, error %s\n", err)
+		}
 	}
-
 	qshell(false, *scriptPtr)
 }

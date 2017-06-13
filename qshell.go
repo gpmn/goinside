@@ -9,10 +9,10 @@ import (
 	"os"
 	"strings"
 
-	qipt "qlang.io/cl/interpreter"
-	"qlang.io/cl/qlang"
-	qall "qlang.io/lib/qlang.all"
-	"qlang.io/lib/terminal"
+	"github.com/gpmn/qlang/lib/terminal"
+	qipt "github.com/gpmn/qlang/cl/interpreter"
+	"github.com/gpmn/qlang/cl/qlang"
+	qall "github.com/gpmn/qlang/lib/qlang.all"
 )
 
 var (
