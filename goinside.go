@@ -127,7 +127,7 @@ func parseSymbols(libPath string, libIdx int, mapSymbol map[string][]SymbolInfoE
 	//var secDesc string
 
 	if nil != err {
-		fmt.Printf("    warning: %s's en.Symbols() got error : %s\n", libPath, err)
+		//fmt.Printf("    warning: %s's en.Symbols() got error : %s\n", libPath, err)
 	} else {
 		for _, s := range symbols {
 			if s.Section == elf.SHN_UNDEF || s.Section >= elf.SHN_LORESERVE {
@@ -185,9 +185,8 @@ func parseProc(pid int) ([]LibraryInfoItem, map[string][]SymbolInfoEx) {
 var libraryArray []LibraryInfoItem
 var symbolMap map[string][]SymbolInfoEx
 
-//ParseEmbedded :
-//export ParseEmbedded
-func ParseEmbedded() {
+//ParseProcess :
+func ParseProcess() {
 	libraryArray, symbolMap = parseProc(os.Getpid())
 }
 
@@ -211,7 +210,7 @@ func getSymbolByName(symName string, idx int, libArr []LibraryInfoItem, symMap m
 		return sym, 2
 	}
 	sym = symMap[symName][idx] //TODO:: many itemes have the same name ???
-	fmt.Printf("got sym %v\n", sym)
+	//fmt.Printf("got sym %v\n", sym)
 	lib := libArr[sym.libraryIdx]
 	addr = uintptr(lib.Begin + sym.Value)
 	return sym, addr
@@ -259,17 +258,9 @@ func showWaitStatus(desc string, ws syscall.WaitStatus) {
 	fmt.Printf("%s - ws 0x%x %s\n", desc, ws, res)
 }
 
-func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) error {
-	if pid == os.Getpid() {
-		return fmt.Errorf("can not inject to self")
-	}
-
-	_, err := os.Stat(injectLibPath)
-	if nil != err {
-		fmt.Printf("lib %s can not be stat, error : %s\n", injectLibPath, err)
-		return err
-	}
-
+//args sequence for x64 : rdi, rsi, rdx, rcx, r8, r9
+//len(args) should less than 6
+func ptraceCallInner(funcName string, args []uint64, pid int, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) (uint64, error) {
 	// void* dlopen_wrapper(void*(*dlopen_ptr)(const char* , int ), const char* path, int flag){
 	//       return dlopen_ptr(path, flag);
 	// }
@@ -282,12 +273,11 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 	//		add int 3 [0xcc] here
 	// 915:	c9                   	leaveq ---- change to int3 [0xcc] at here
 	// 916:	c3                   	retq
-
 	var ws syscall.WaitStatus
 	var backupCode [128]byte
 	var backupStack [1024]byte
 	var backupRegs syscall.PtraceRegs
-	dlopenShellCode := []byte{
+	shellCode := []byte{
 		0x55,
 		0x48, 0x89, 0xe5,
 		0x48, 0x83, 0xec, 0x20,
@@ -299,6 +289,168 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		0x90, // nop
 	}
 
+	_, addrTarget := getSymbolByName(funcName, 0, libArr, symMap)
+	if addrTarget < 4 {
+		fmt.Printf("getSymbolByName(%s) failed, not found!\n", funcName)
+		return 0, fmt.Errorf("%s not found", funcName)
+	}
+
+	if overlapFunc == "" {
+		overlapFunc = "main"
+	}
+
+	_, addrOverlap := getSymbolByName(overlapFunc, 0, libArr, symMap)
+	if addrOverlap < 4 {
+		fmt.Printf("getSymbolByName(%s) failed, not found!\n", overlapFunc)
+		return 0, fmt.Errorf("overlapFunc %s not found", overlapFunc)
+	}
+
+	fmt.Printf("%s - 0x%x, overlap %s - 0x%x\n", funcName, addrTarget, overlapFunc, addrOverlap)
+
+	err := syscall.PtraceAttach(pid)
+	if nil != err {
+		fmt.Printf("PtraceAttach(%d) failed, error %s!\n", pid, err)
+		return 0, err
+	}
+	defer func() {
+		e := syscall.PtraceDetach(pid)
+		if nil != e {
+			fmt.Printf("ptraceCallInner - PtraceDetach failed, error %v\n", err)
+		} else {
+			fmt.Printf("ptraceCallInner - PtraceDetach OK\n")
+		}
+	}()
+
+	if _, err = syscall.Wait4(pid, &ws, syscall.WUNTRACED, nil); nil != err {
+		fmt.Printf("Wait4(%d) failed, error %s!\n", pid, err)
+		return 0, err
+	}
+	//showWaitStatus("expecting a stop signal", ws)
+	// 1.peek and backup stack/code/regs
+	if err = syscall.PtraceGetRegs(pid, &backupRegs); nil != err {
+		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
+		return 0, err
+	}
+	// backup regs for later use
+	regs := backupRegs
+
+	if _, err = syscall.PtracePeekData(pid, uintptr(regs.Rsp-uint64(len(backupStack))), backupStack[0:]); nil != err {
+		fmt.Printf("PtracePeekData of stack @ (0x%x - 0x%x) failed, error %s!\n", regs.Rsp, len(backupStack), err)
+		return 0, err
+	}
+
+	if _, err = syscall.PtracePeekText(pid, addrOverlap, backupCode[0:]); nil != err {
+		fmt.Printf("PtracePeekText of code @ 0x%x failed, error %s!\n", addrOverlap, err)
+		return 0, err
+	}
+
+	// 3.change code @ addrOverlap
+	if _, err = syscall.PtracePokeData(pid, addrOverlap, shellCode); nil != err {
+		fmt.Printf("PtracePokeData of shellCode @ codeseg:0x%x failed, error %s!\n", addrOverlap, err)
+		return 0, err
+	}
+
+	regs.Rax = uint64(addrTarget) // inner func ptr
+	//rdi, rsi, rdx, rcx, r8, r9
+	if len(args) >= 1 {
+		regs.Rdi = args[0]
+	}
+	if len(args) >= 2 {
+		regs.Rsi = args[1]
+	}
+	if len(args) >= 3 {
+		regs.Rdx = args[2]
+	}
+	if len(args) >= 4 {
+		regs.Rcx = args[3]
+	}
+	if len(args) >= 5 {
+		regs.R8 = args[4]
+	}
+	if len(args) >= 6 {
+		regs.R9 = args[5]
+	}
+
+	regs.SetPC(uint64(addrOverlap))
+
+	// 4. setup regs,
+	if err = syscall.PtraceSetRegs(pid, &regs); nil != err {
+		fmt.Printf("PtraceSetRegs failed, error %s!\n", err)
+		return 0, err
+	}
+
+	// 5. restart tracee
+	if err = syscall.PtraceCont(pid, 0); nil != err {
+		fmt.Printf("PtraceCont failed, error %s!\n", err)
+		return 0, err
+	}
+
+	if _, err = syscall.Wait4(pid, &ws, syscall.WUNTRACED, nil); nil != err { // wait for trap
+		fmt.Printf("Wait4 tracee's trap signal failed, error : %s!\n", err)
+		return 0, err
+	}
+	//showWaitStatus("expecting a trap signal", ws)
+	// get regs to see if success
+	if err = syscall.PtraceGetRegs(pid, &regs); nil != err {
+		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
+		return 0, err
+	}
+	result := regs.Rax
+	fmt.Printf("%s return 0x%x\n", funcName, regs.Rax)
+
+	// 6. restore code
+	if _, err = syscall.PtracePokeText(pid, addrOverlap, backupCode[0:]); nil != err {
+		fmt.Printf("PtracePokeText restore code @ 0x%x failed, error : %s!\n", addrOverlap, err)
+		return result, err
+	}
+
+	// 7. restore stack
+	if _, err = syscall.PtracePokeData(pid, uintptr(backupRegs.Rsp-uint64(len(backupStack))), backupStack[0:]); nil != err {
+		fmt.Printf("PtracePokeData restore stack @ (0x%x - 0x%x) failed, error : %s!\n", backupRegs.Rsp, len(backupStack), err)
+		return result, err
+	}
+
+	// 8. restore regs
+	if err = syscall.PtraceSetRegs(pid, &backupRegs); nil != err {
+		fmt.Printf("PtraceSetregs restore failed, error : %s!\n", err)
+		return result, err
+	}
+
+	return result, nil
+}
+
+func ptraceCall(funcName string, args []uint64, pid int) (uint64, error) {
+	return ptraceCallInner(funcName, args, pid, libraryArray, symbolMap, "main")
+}
+
+func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap map[string][]SymbolInfoEx, overlapFunc string) error {
+	if pid == os.Getpid() {
+		return fmt.Errorf("can not inject to self")
+	}
+
+	_, err := os.Stat(injectLibPath)
+	if nil != err {
+		fmt.Printf("lib %s can not be stat, error : %s\n", injectLibPath, err)
+		return err
+	}
+
+	var ws syscall.WaitStatus
+	var backupCode [128]byte
+	var backupStack [1024]byte
+	var backupRegs syscall.PtraceRegs
+	shellCode := []byte{
+		0x55,
+		0x48, 0x89, 0xe5,
+		0x48, 0x83, 0xec, 0x20,
+		0xff, 0xd0,
+		0xcc, // int 3
+		0xc9,
+		0xc3,
+		0x90, // nop
+		0x90, // nop
+	}
+
+	//TODO:: change to dlopen
 	_, addrDlopen := getSymbolByName("dbg_dlopen", 0, libArr, symMap)
 	if addrDlopen < 4 {
 		fmt.Printf("getSymbolByName(dlopen) failed, dlopen not found!\n")
@@ -315,20 +467,27 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		return fmt.Errorf("overlapFunc %s not found", overlapFunc)
 	}
 
-	fmt.Printf("addrDlopen - 0x%x, overlap %s - 0x%x\n", addrDlopen, overlapFunc, addrOverlap)
+	fmt.Printf("dbg_dlopen - 0x%x, overlap %s - 0x%x\n", addrDlopen, overlapFunc, addrOverlap)
 
 	err = syscall.PtraceAttach(pid)
 	if nil != err {
-		fmt.Printf("PtraceAttach(%s) failed, error %s!\n", os.Args[1], err)
+		fmt.Printf("PtraceAttach(%d) failed, error %s!\n", pid, err)
 		return err
 	}
-	defer syscall.PtraceDetach(pid)
+	defer func() {
+		e := syscall.PtraceDetach(pid)
+		if nil != e {
+			fmt.Printf("injectInner - PtraceDetach failed, error %v\n", err)
+		} else {
+			fmt.Printf("ptraceCallInner - PtraceDetach OK\n")
+		}
+	}()
 
 	if _, err = syscall.Wait4(pid, &ws, syscall.WUNTRACED, nil); nil != err {
 		fmt.Printf("Wait4(%d) failed, error %s!\n", pid, err)
 		return err
 	}
-	showWaitStatus("expecting a stop signal", ws)
+	//showWaitStatus("expecting a stop signal", ws)
 	// 1.peek and backup stack/code/regs
 	if err = syscall.PtraceGetRegs(pid, &backupRegs); nil != err {
 		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
@@ -349,7 +508,7 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 	}
 
 	// prepare inject code
-	injectCode := append(dlopenShellCode, []byte(injectLibPath)...)
+	injectCode := append(shellCode, []byte(injectLibPath)...)
 	injectCode = append(injectCode, []byte{0x00, 0x00}...)
 	// 3.change code @ addrOverlap
 	if _, err = syscall.PtracePokeData(pid, addrOverlap, injectCode); nil != err {
@@ -357,9 +516,9 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		return err
 	}
 
-	regs.Rax = uint64(addrDlopen)                                 // inner func ptr
-	regs.Rdi = uint64(addrOverlap) + uint64(len(dlopenShellCode)) // entry of shell code
-	regs.Rsi = 0x101                                              // RTLD_LAZY | RTLD_GLOBAL
+	regs.Rax = uint64(addrDlopen)                           // inner func ptr
+	regs.Rdi = uint64(addrOverlap) + uint64(len(shellCode)) // entry of shell code
+	regs.Rsi = 0x101                                        // RTLD_LAZY | RTLD_GLOBAL
 	regs.SetPC(uint64(addrOverlap))
 
 	// 4. setup regs,
@@ -378,7 +537,7 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		fmt.Printf("Wait4 tracee's trap signal failed, error : %s!\n", err)
 		return err
 	}
-	showWaitStatus("expecting a trap signal", ws)
+	//showWaitStatus("expecting a trap signal", ws)
 	// get regs to see if dlopen success
 	if err = syscall.PtraceGetRegs(pid, &regs); nil != err {
 		fmt.Printf("PtraceGetReg pid%d failed, error %s!\n", pid, err)
@@ -406,12 +565,6 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 	// 8. restore regs
 	if err = syscall.PtraceSetRegs(pid, &backupRegs); nil != err {
 		fmt.Printf("PtraceSetregs restore failed, error : %s!\n", err)
-		return err
-	}
-
-	// 9. restart tracee
-	if err = syscall.PtraceCont(pid, 0); nil != err {
-		fmt.Printf("PtraceCont failed, error %s!\n", err)
 		return err
 	}
 
@@ -487,8 +640,9 @@ func shell() {
 }
 
 func main() {
-	pidPtr := flag.Int("pid", -1, "target process's pid")
-	scriptPtr := flag.String("script", "", "script to be auto executed")
+	pidPtr := flag.Int("p", -1, "pid - target process's pid")
+	scriptPtr := flag.String("s", "", "script - script to be auto executed")
+
 	flag.Parse()
 
 	if *pidPtr < 0 {
@@ -496,9 +650,18 @@ func main() {
 	} else {
 		err := Inject(*pidPtr, "/home/golang/gopath/bin/libgoinside.so")
 		if nil == err {
-			fmt.Printf("Inject success!")
+			fmt.Printf("Inject success!\n")
+			//parse again with new so
+			ParseProcess()
+			remotePort, err := ptraceCall("goin_get_service_port", []uint64{}, *pidPtr)
+			if err != nil {
+				fmt.Printf("ptraceCall(goin_get_service_port) failed, error %s\n", err)
+			} else {
+				fmt.Printf("ptraceCall(goin_get_service_port) OK, got remote service port %d\n", remotePort)
+			}
 		} else {
 			fmt.Printf("Inject failed, error %s\n", err)
+			fmt.Printf("If you are not root, please 'echo 0 > /proc/sys/kernel/yama/ptrace_scope' then retry\n")
 		}
 	}
 	qshell(false, *scriptPtr)

@@ -13,10 +13,6 @@ void* dbg_dlopen(const char* path, int flag){
      return h;
 }
 
-void msg(int idx, const char* str){
-     printf(str, idx);
-}
-
 void test1(void){
      printf("hello world!\n");
      time_t tm;
@@ -87,7 +83,7 @@ int main(){
 
      for(int idx = 0; idx < 100000000; idx ++){
           usleep(1000000);
-          msg(idx, "%d\n");
+          printf("%d - %d\n", getpid(), idx);
      }
      void *kkk = dlopen;
      printf("%p\n", kkk);
