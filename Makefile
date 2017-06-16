@@ -1,7 +1,9 @@
 BINDIR:=${GOPATH}/bin
 all:clean dummy
+	ln -s autoload/goinside_init.c
 	go build -buildmode=c-shared -o ${BINDIR}/libgoinside.so
-	go build -o ${BINDIR}/goinject
+	rm goinside_init.c
+	go build -o ${BINDIR}/goinject 
 	file ${BINDIR}/libgoinside.so
 	file ${BINDIR}/goinject
 

@@ -1,7 +1,12 @@
 package main
 
+// #include <stdint.h>
+// int64_t gullPortNum = -1;
+// int64_t goin_get_service_port(void){
+//     return gullPortNum;
+// }
+import "C"
 import (
-	"C"
 	"bufio"
 	"debug/elf"
 	"flag"
@@ -57,7 +62,6 @@ func collectLibInfos(pid int, procLibInfos *[]LibraryInfoItem) (res bool) {
 		var item LibraryInfoItem
 		line := scanner.Text()
 		strlst := strings.Fields(line)
-		//fmt.Printf("%s\n", line)
 
 		if strlst[1] != "r-xp" {
 			continue
@@ -66,8 +70,7 @@ func collectLibInfos(pid int, procLibInfos *[]LibraryInfoItem) (res bool) {
 		if len(strlst) < 6 ||
 			strlst[5] == "" ||
 			strings.HasPrefix(strlst[5], "[") ||
-			strings.HasSuffix(strlst[5], "]") ||
-			strings.HasSuffix(strlst[5], "libgoinside.so") {
+			strings.HasSuffix(strlst[5], "]") {
 			continue
 		}
 
@@ -184,11 +187,6 @@ func parseProc(pid int) ([]LibraryInfoItem, map[string][]SymbolInfoEx) {
 
 var libraryArray []LibraryInfoItem
 var symbolMap map[string][]SymbolInfoEx
-
-//ParseProcess :
-func ParseProcess() {
-	libraryArray, symbolMap = parseProc(os.Getpid())
-}
 
 // if name not found
 //      return (sym, 0)
@@ -339,8 +337,8 @@ func ptraceCallInner(funcName string, args []uint64, pid int, libArr []LibraryIn
 		return 0, err
 	}
 
-	if _, err = syscall.PtracePeekText(pid, addrOverlap, backupCode[0:]); nil != err {
-		fmt.Printf("PtracePeekText of code @ 0x%x failed, error %s!\n", addrOverlap, err)
+	if _, err = syscall.PtracePeekData(pid, addrOverlap, backupCode[0:]); nil != err {
+		fmt.Printf("PtracePeekData of code @ 0x%x failed, error %s!\n", addrOverlap, err)
 		return 0, err
 	}
 
@@ -479,7 +477,7 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		if nil != e {
 			fmt.Printf("injectInner - PtraceDetach failed, error %v\n", err)
 		} else {
-			fmt.Printf("ptraceCallInner - PtraceDetach OK\n")
+			fmt.Printf("injectInner - PtraceDetach OK\n")
 		}
 	}()
 
@@ -502,8 +500,8 @@ func injectInner(pid int, injectLibPath string, libArr []LibraryInfoItem, symMap
 		return err
 	}
 
-	if _, err = syscall.PtracePeekText(pid, addrOverlap, backupCode[0:]); nil != err {
-		fmt.Printf("PtracePeekText of code @ 0x%x failed, error %s!\n", addrOverlap, err)
+	if _, err = syscall.PtracePeekData(pid, addrOverlap, backupCode[0:]); nil != err {
+		fmt.Printf("PtracePeekData of code @ 0x%x failed, error %s!\n", addrOverlap, err)
 		return err
 	}
 
@@ -648,16 +646,17 @@ func main() {
 	if *pidPtr < 0 {
 		fmt.Printf("-pid param invalid, will not inject so to target!\n")
 	} else {
+		fmt.Println("before Inject")
 		err := Inject(*pidPtr, "/home/golang/gopath/bin/libgoinside.so")
 		if nil == err {
 			fmt.Printf("Inject success!\n")
 			//parse again with new so
-			ParseProcess()
+			libraryArray, symbolMap = parseProc(*pidPtr)
 			remotePort, err := ptraceCall("goin_get_service_port", []uint64{}, *pidPtr)
 			if err != nil {
 				fmt.Printf("ptraceCall(goin_get_service_port) failed, error %s\n", err)
 			} else {
-				fmt.Printf("ptraceCall(goin_get_service_port) OK, got remote service port %d\n", remotePort)
+				fmt.Printf("ptraceCall(goin_get_service_port) OK, got remote service port %d\n", int(remotePort))
 			}
 		} else {
 			fmt.Printf("Inject failed, error %s\n", err)
